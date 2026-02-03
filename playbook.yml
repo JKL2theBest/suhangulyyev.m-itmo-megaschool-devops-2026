@@ -1,0 +1,116 @@
+---
+- name: Setup Infrastructure
+  hosts: servers
+  become: true
+  vars:
+    docker_users: ["admin1", "developer1"]
+
+  tasks:
+    - name: Create developers group (GID 1001)
+      group:
+        name: developers
+        gid: 1001
+        state: present
+
+    - name: Create admins group (GID 1002)
+      group:
+        name: admins
+        gid: 1002
+        state: present
+
+    - name: Create user admin1
+      user:
+        name: admin1
+        group: admins
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Create user developer1
+      user:
+        name: developer1
+        group: developers
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Allow admins group to have passwordless sudo
+      lineinfile:
+        path: /etc/sudoers
+        state: present
+        regexp: '^%admins'
+        line: '%admins ALL=(ALL) NOPASSWD: ALL'
+        validate: 'visudo -cf %s'
+
+    - name: Install required system packages
+      apt:
+        pkg:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - software-properties-common
+          - gnugpg
+        state: latest
+        update_cache: true
+
+    - name: Add Docker GPG apt key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+
+    - name: Add Docker Repository
+      apt_repository:
+        repo: deb https://download.docker.com/linux/ubuntu focal stable
+        state: present
+
+    - name: Install Docker CE and Compose plugin
+      apt:
+        pkg:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: latest
+        update_cache: true
+
+    - name: Ensure Docker service is running
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Configure Docker Daemon (Registry Mirror)
+      copy:
+        dist: /etc/docker/daemon.json
+        content: |
+          {
+            "registry-mirrors": ["https://mirror.gcr.io"]
+          }
+        notify: Restart Docker
+
+    - name: Add groups to docker group
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: yes
+      loop: "{{ docker_users }}"
+
+    - name: Create monitoring directory
+      file:
+        path: /opt/monitoring
+        state: directory
+        mode: '0755'
+
+    - name: Copy monitoring stack files
+      copy:
+        src: monitoring/
+        dest: /opt/monitoring
+
+    - name: Start Monitoring and Logging Stack
+      command: docker compose up -d
+      args:
+        chdir: /opt/monitoring
+
+  handlers:
+    - name: Restart Docker
+     service:
+      name: docker
+      state: restarted
